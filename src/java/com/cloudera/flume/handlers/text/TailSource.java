@@ -340,7 +340,7 @@ public class TailSource extends EventSource.Base {
         // copy data from current file pointer to EOF to dest.
         bytesread = 0;
         String str;
-        while ((str = raf.readLine()) != null) {
+        while ((str = readFullLine(raf)) != null) {
           byte[] data = str.getBytes();
 
           Event e = new EventImpl(data);
