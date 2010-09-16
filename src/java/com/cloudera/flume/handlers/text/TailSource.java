@@ -230,6 +230,55 @@ public class TailSource extends EventSource.Base {
     }
 
     /**
+     * Read a line terminated by newlines (but not one terminated by eof)
+     */
+    private long bytesread = 0;
+
+    private String readFullLine(RandomAccessFile rf) throws IOException {
+      long prevpos = rf.getFilePointer();
+
+      /* we don't want to risk blocking forever, so chop lines longer than this size */
+      int maxlinelen = 1024;
+
+      byte[] buf = new byte[maxlinelen];
+      int bytesread = rf.read(buf);
+      if (bytesread < 0) {
+        /* eof */
+        return null;
+      }
+
+      this.bytesread += bytesread;
+
+      /* we have some data; look for \r, \n, or \r\n */
+      int i;
+      for (i=0; i < bytesread; ++i) {
+        if (buf[i]=='\r' || buf[i]=='\n') break;
+      }
+
+      if (i==bytesread) {
+        /* no newline anywhere in the buffer */
+        if (bytesread==maxlinelen) {
+          /* we read a whole ton with no line break, so break the line */
+          return new String(buf, 0, bytesread);
+        }
+        /* otherwise, assume we're in the middle of an incomplete line. rewind */
+        rf.seek(prevpos);
+        return null;
+      }
+
+      /* we found a complete line. woohoo! */
+      String rv = new String(buf, 0, i);
+      int bytes_to_gobble = i + 1;
+      /* if it's a \r\n, gobble the \n as well */
+      if (buf[i]=='\r' && i < bytesread - 1 && buf[i+1]=='\n') {
+        bytes_to_gobble += 1;
+      }
+      /* seek to the end of our complete line */
+      rf.seek(prevpos + bytes_to_gobble);
+      return rv;
+    }
+
+    /**
      * Attempt to get new data.
      * 
      * Returns true if cursor's state has changed.
@@ -289,20 +338,19 @@ public class TailSource extends EventSource.Base {
 
         // I make this a rendezvous because this source is being pulled
         // copy data from current file pointer to EOF to dest.
-        int len = 0;
+        bytesread = 0;
         String str;
         while ((str = raf.readLine()) != null) {
           byte[] data = str.getBytes();
 
           Event e = new EventImpl(data);
           sync.put(e);
-          len += data.length;
 
           lastReadOffset = raf.getFilePointer();
           lastMod = file.lastModified();
         }
 
-        if (len == 0) {
+        if (bytesread == 0) {
           // didn't read anyhting? raflen != filelen? restart file.
           LOG.debug("tail " + file
               + " : no progress but raflen != filelen, resetting");
@@ -310,7 +358,7 @@ public class TailSource extends EventSource.Base {
           return true;
         }
 
-        LOG.debug("tail " + file + ": read " + len + " bytes");
+        LOG.debug("tail " + file + ": read " + bytesread + " bytes");
       } catch (IOException e) {
         LOG.debug(e.getMessage(), e);
         raf = null;
